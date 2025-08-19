@@ -1,0 +1,4 @@
+requests
+google-cloud-storage
+beautifulsoup4
+functions-framework
