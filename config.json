@@ -1,0 +1,10 @@
+{
+    "books.toscrape.com": {
+        "next_page_selector": ".pager .next a",
+        "result_link_selector": "article.product_pod h3 a"
+    },
+    "another.domain.com": {
+        "next_page_selector": ".next-link",
+        "result_link_selector": ".result-item"
+    }
+}
