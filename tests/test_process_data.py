@@ -24,7 +24,7 @@ def test_process_data_success(mocker, monkeypatch):
     # Mock the CloudEvent object. The function expects a specific payload
     # structure for GCS object creation events.
     source_bucket = "test-raw-bucket"
-    source_file = "test_data_123.html"
+    source_file = "example.com/test_data_123.html"
     resource_name = f"projects/_/buckets/{source_bucket}/objects/{source_file}"
     mock_event_data = {"protoPayload": {"resourceName": resource_name}}
     mock_cloud_event = mocker.Mock()
@@ -65,7 +65,7 @@ def test_process_data_success(mocker, monkeypatch):
 
     expected_json_content = {"source_file": source_file, "headings": ["Title 1", "Subtitle 2", "Another Heading"]}
     expected_json_string = json.dumps(expected_json_content, indent=2)
-    expected_processed_filename = "test_data_123.json"
+    expected_processed_filename = "example.com/test_data_123.json"
 
     mock_storage_client.bucket.assert_any_call("test-processed-bucket")
     mock_processed_bucket.blob.assert_called_once_with(expected_processed_filename)

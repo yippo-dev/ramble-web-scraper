@@ -24,8 +24,8 @@ def test_scrape_and_upload_success(mocker, monkeypatch):
     """
     # 1. Setup: Mock environment variables and external dependencies
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
-    # Use a URL with a path component to test filename generation
-    target_url = "http://test.com/index.html"
+    # Use a realistic URL to test filename generation
+    target_url = "http://books.toscrape.com/index.html"
     monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the requests.get call
@@ -35,9 +35,6 @@ def test_scrape_and_upload_success(mocker, monkeypatch):
     )
     mock_response.raise_for_status.return_value = None
     mock_requests_get = mocker.patch("main.requests.get", return_value=mock_response)
-
-    # Mock os.urandom for a predictable filename suffix
-    mocker.patch("main.os.urandom", return_value=b"\xde\xad\xbe\xef\xca\xfe\xba\xbe")
 
     # Mock the GCS client and its methods
     mock_storage_client = mocker.patch("main.storage_client")
@@ -62,9 +59,7 @@ def test_scrape_and_upload_success(mocker, monkeypatch):
     )
 
     # Verify the GCS upload was performed correctly
-    expected_random_suffix = "deadbeefcafebabe"
-    expected_base_filename = "index_html"
-    expected_filename = f"{expected_base_filename}_{expected_random_suffix}.html"
+    expected_filename = "books.toscrape.com/index.html"
 
     mock_storage_client.bucket.assert_called_once_with("test-raw-bucket")
     mock_bucket.blob.assert_called_once_with(expected_filename)
@@ -214,3 +209,98 @@ def test_scrape_and_upload_gcs_failure(mocker, monkeypatch):
     assert status_code == 500
     assert "Error during GCS upload" in response_text
     assert "GCS upload failed for test" in response_text
+
+
+def test_scrape_and_upload_uses_url_for_filename(mocker, monkeypatch):
+    """
+    Tests that the uploaded filename is based on the URL path for versioning.
+    - Mocks successful web request.
+    - Mocks GCS upload.
+    - Verifies the blob name is derived directly from the URL path.
+    """
+    # 1. Setup: Mock environment variables and external dependencies
+    monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
+    # Use a URL with a path component to test filename generation
+    target_url = "http://example.com/some/path/page.html"
+    monkeypatch.setenv("TARGET_URL", target_url)
+
+    # Mock the requests.get call
+    mock_response = mocker.Mock()
+    mock_response.text = (
+        "<html><head><title>Test Page</title></head><body><h1>Hello</h1></body></html>"
+    )
+    mock_response.raise_for_status.return_value = None
+    mock_requests_get = mocker.patch("main.requests.get", return_value=mock_response)
+
+    # Mock the GCS client and its methods
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_bucket = mock_storage_client.bucket.return_value
+    mock_blob = mock_bucket.blob.return_value
+
+    # The function expects a Flask request object, but doesn't use it.
+    # A simple mock is sufficient.
+    mock_flask_request = mocker.Mock(spec=Request)
+
+    # 2. Execution: Call the function
+    response_text, status_code = scrape_and_upload(mock_flask_request)
+
+    # 3. Assertions
+    # Verify the web request was made correctly
+    mock_requests_get.assert_called_once_with(
+        target_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        },
+        timeout=10,
+    )
+
+    # Verify the GCS upload was performed correctly
+    # The filename should be derived from the URL path, without randomness.
+    expected_filename = "example.com/some/path/page.html"
+
+    mock_storage_client.bucket.assert_called_once_with("test-raw-bucket")
+    mock_bucket.blob.assert_called_once_with(expected_filename)
+    mock_blob.upload_from_string.assert_called_once_with(
+        mock_response.text, content_type="text/html"
+    )
+
+    # Verify the function's return value
+    assert status_code == 200
+    assert "Successfully scraped" in response_text
+    assert target_url in response_text
+    assert f"gs://test-raw-bucket/{expected_filename}" in response_text
+
+
+def test_scrape_and_upload_root_url_creates_index(mocker, monkeypatch):
+    """
+    Tests that a root URL (e.g., http://example.com) is correctly
+    saved as 'example.com/index.html'.
+    """
+    # 1. Setup
+    monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
+    target_url = "http://example.com"  # Root URL with no path
+    monkeypatch.setenv("TARGET_URL", target_url)
+
+    # Mock the requests.get call
+    mock_response = mocker.Mock()
+    mock_response.text = "<html><body>Root Page</body></html>"
+    mock_response.raise_for_status.return_value = None
+    mocker.patch("main.requests.get", return_value=mock_response)
+
+    # Mock the GCS client
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_bucket = mock_storage_client.bucket.return_value
+    mock_blob = mock_bucket.blob.return_value
+
+    mock_flask_request = mocker.Mock(spec=Request)
+
+    # 2. Execution
+    scrape_and_upload(mock_flask_request)
+
+    # 3. Assertions
+    # The filename should be the domain plus '/index.html'.
+    expected_filename = "example.com/index.html"
+    mock_bucket.blob.assert_called_once_with(expected_filename)
+    mock_blob.upload_from_string.assert_called_once_with(
+        mock_response.text, content_type="text/html"
+    )

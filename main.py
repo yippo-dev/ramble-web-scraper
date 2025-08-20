@@ -1,5 +1,6 @@
 import json
 import os
+from urllib.parse import urlparse
 
 import functions_framework
 import requests
@@ -43,12 +44,21 @@ def scrape_and_upload(request):
         response.raise_for_status()
         html_content = response.text
 
-        # 2. Generate a unique filename for the raw data.
-        # Using os.urandom provides a secure way to get a random suffix.
-        random_suffix = os.urandom(8).hex()
-        # Sanitize the base URL to create a safe filename.
-        base_filename = os.path.basename(target_url).split("?")[0].replace(".", "_")
-        filename = f"{base_filename}_{random_suffix}.html"
+        # 2. Generate a deterministic filename from the URL for versioning.
+        parsed_url = urlparse(target_url)
+        # Create a path-like structure from the URL's netloc and path.
+        # This ensures that pages from different domains are stored separately.
+        filename = parsed_url.netloc + parsed_url.path
+
+        # If the path ends with a '/', treat it as an index page.
+        if filename.endswith("/"):
+            filename += "index.html"
+        # Handle root URL case where path is empty
+        elif not parsed_url.path:
+            filename += "/index.html"
+        # Ensure the filename has an extension if it's a "directory-like" URL without one
+        elif not os.path.splitext(filename)[1]:
+            filename += ".html"
 
         # 3. Upload the raw HTML to Cloud Storage.
         bucket = storage_client.bucket(raw_data_bucket)
