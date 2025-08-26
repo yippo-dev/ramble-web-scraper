@@ -7,12 +7,13 @@ import functions_framework
 import requests
 from bs4 import BeautifulSoup
 from google.api_core import exceptions as google_exceptions
-from google.cloud import storage
+from google.cloud import pubsub_v1, storage
 
 # --- Global Clients ---
 # Initializing clients globally to reuse connections across function
 # invocations, which is a performance best practice for Cloud Functions.
 storage_client = storage.Client()
+pubsub_publisher = pubsub_v1.PublisherClient()
 
 
 def load_config():
@@ -173,6 +174,7 @@ def process_data(cloud_event):
     """
     # Load configuration from environment variables and config file
     processed_data_bucket = os.environ.get("PROCESSED_DATA_BUCKET")
+    crawl_queue_topic = os.environ.get("CRAWL_QUEUE_TOPIC")
     config = load_config()
 
     if not processed_data_bucket:
@@ -284,6 +286,26 @@ def process_data(cloud_event):
         processed_bucket = storage_client.bucket(processed_data_bucket)
         processed_blob = processed_bucket.blob(processed_file_name)
         processed_blob.upload_from_string(json_data, content_type="application/json")
+
+        # 5. If a next page is found, publish it to the crawl queue topic.
+        next_page_url = processed_data.get("next_page_url")
+        if next_page_url and crawl_queue_topic:
+            message_payload = {"url": next_page_url}
+            message_data = json.dumps(message_payload).encode("utf-8")
+
+            future = pubsub_publisher.publish(crawl_queue_topic, data=message_data)
+            # future.result() # Optional: block until publish is complete
+
+            print(
+                json.dumps(
+                    {
+                        "message": f"Published next page to {crawl_queue_topic}",
+                        "severity": "INFO",
+                        "next_page_url": next_page_url,
+                        "topic": crawl_queue_topic,
+                    }
+                )
+            )
 
         success_message = (
             f"Successfully processed {file_name} and uploaded to "

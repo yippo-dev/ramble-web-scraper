@@ -371,3 +371,114 @@ def test_process_data_uses_bundled_config_for_link_extraction(mocker, monkeypatc
 
     assert uploaded_data == expected_json_content
     assert content_type_arg == "application/json"
+
+
+def test_process_data_publishes_next_page_url(mocker, monkeypatch):
+    """
+    Tests that if a 'next_page_url' is found, it is published to the
+    Pub/Sub topic for the next crawl job.
+    - Mocks a GCS CloudEvent.
+    - Mocks config.json to find a next page link.
+    - Mocks GCS download and upload.
+    - Mocks the Pub/Sub publisher client.
+    - Verifies that the publisher's `publish` method is called with the
+      correct topic and the extracted next page URL.
+    """
+    # 1. Setup
+    # Mock environment variables
+    monkeypatch.setenv("PROCESSED_DATA_BUCKET", "test-processed-bucket")
+    topic_name = "projects/ramble-web-scraper/topics/crawl-queue"
+    monkeypatch.setenv("CRAWL_QUEUE_TOPIC", topic_name)
+
+    # Mock the CloudEvent
+    source_bucket = "test-raw-bucket"
+    source_file = "books.toscrape.com/page-1.html"
+    mock_cloud_event = mocker.Mock()
+    mock_cloud_event.data = {"bucket": source_bucket, "name": source_file}
+
+    # Mock HTML with a next page link
+    next_page_relative_url = "catalogue/page-2.html"
+    next_page_absolute_url = f"http://books.toscrape.com/{next_page_relative_url}"
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <body>
+        <ul class="pager">
+            <li class="next"><a href="{next_page_relative_url}">next</a></li>
+        </ul>
+    </body>
+    </html>
+    """
+
+    # Mock config.json
+    config_data = {
+        "books.toscrape.com": {
+            "next_page_selector": ".pager .next a",
+            "result_link_selector": "article.product_pod h3 a",
+        }
+    }
+    mocker.patch("builtins.open", mocker.mock_open(read_data=json.dumps(config_data)))
+
+    # Mock GCS client
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_raw_bucket = mocker.Mock()
+    mock_raw_blob = mocker.Mock()
+    mock_raw_blob.download_as_text.return_value = html_content
+    mock_raw_bucket.blob.return_value = mock_raw_blob
+    mock_processed_bucket = mocker.Mock()
+    mock_processed_blob = mocker.Mock()
+    mock_processed_bucket.blob.return_value = mock_processed_blob
+
+    def bucket_side_effect(bucket_name):
+        if bucket_name == source_bucket:
+            return mock_raw_bucket
+        if bucket_name == "test-processed-bucket":
+            return mock_processed_bucket
+        return mocker.Mock()
+
+    mock_storage_client.bucket.side_effect = bucket_side_effect
+
+    # Mock Pub/Sub publisher client, which will be added to main.py
+    mock_publisher = mocker.patch("main.pubsub_publisher")
+
+    # 2. Execution
+    process_data(mock_cloud_event)
+
+    # 3. Assertions
+    # Verify Pub/Sub publish was called correctly
+    mock_publisher.publish.assert_called_once()
+
+    # Check the arguments passed to publish
+    call_args = mock_publisher.publish.call_args
+    assert call_args.args[0] == topic_name
+
+    # Decode the data payload for verification
+    published_data_bytes = call_args.kwargs["data"]
+    published_data = json.loads(published_data_bytes.decode("utf-8"))
+
+    expected_payload = {"url": next_page_absolute_url}
+    assert published_data == expected_payload
+
+
+def test_process_data_does_not_publish_if_no_next_link(mocker, monkeypatch):
+    """
+    Tests that if no 'next_page_url' is found, the Pub/Sub publisher is
+    not called.
+    """
+    # 1. Setup
+    monkeypatch.setenv("PROCESSED_DATA_BUCKET", "test-processed-bucket")
+    monkeypatch.setenv("CRAWL_QUEUE_TOPIC", "some/topic")
+
+    mock_cloud_event = mocker.Mock()
+    mock_cloud_event.data = {"bucket": "test-raw-bucket", "name": "domain.com/last.html"}
+
+    mocker.patch("builtins.open", side_effect=FileNotFoundError)
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_storage_client.bucket.return_value.blob.return_value.download_as_text.return_value = "<html></html>"
+    mock_publisher = mocker.patch("main.pubsub_publisher")
+
+    # 2. Execution
+    process_data(mock_cloud_event)
+
+    # 3. Assertions
+    mock_publisher.publish.assert_not_called()
