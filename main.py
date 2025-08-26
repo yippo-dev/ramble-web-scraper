@@ -1,4 +1,5 @@
 import json
+import base64
 import os
 from urllib.parse import urlparse, urljoin
 
@@ -46,10 +47,13 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTM
 def scrape_and_upload(request):
     """
     An HTTP-triggered Cloud Function that scrapes a website and uploads
-    the raw HTML to a Google Cloud Storage bucket.
+    the raw HTML to a Google Cloud Storage bucket. The function is triggered
+    by a Pub/Sub push subscription. The message body must contain a
+    base64-encoded JSON payload with a "url" key.
+    e.g. {"message": {"data": "eyJ1cmwiOiAiaHR0cDovL2V4YW1wbGUuY29tIn0="}}
     """
-    # Load configuration within the function call to allow for test mocking.
-    target_url = os.environ.get("TARGET_URL", "http://books.toscrape.com/")
+    # Initialize target_url for use in logging/error handlers
+    target_url = None
     raw_data_bucket = os.environ.get("RAW_DATA_BUCKET")
 
     # Ensure the destination bucket is configured.
@@ -61,7 +65,32 @@ def scrape_and_upload(request):
         return log_message, 500
 
     try:
-        # 1. Scrape the target website.
+        # 1. Parse the Pub/Sub message to get the target URL.
+        request_json = request.get_json(silent=True)
+        if not request_json or "message" not in request_json:
+            log_message = "Invalid Pub/Sub message format: missing 'message' key."
+            print(json.dumps({"message": log_message, "severity": "ERROR"}))
+            return log_message, 400
+
+        message = request_json["message"]
+        if "data" not in message:
+            log_message = (
+                "Invalid Pub/Sub message format: missing 'data' key in 'message'."
+            )
+            print(json.dumps({"message": log_message, "severity": "ERROR"}))
+            return log_message, 400
+
+        # Decode the base64-encoded data payload.
+        data = base64.b64decode(message["data"]).decode("utf-8")
+        payload = json.loads(data)
+        target_url = payload.get("url")
+
+        if not target_url:
+            log_message = "URL not found in Pub/Sub message payload."
+            print(json.dumps({"message": log_message, "severity": "ERROR"}))
+            return log_message, 400
+
+        # 2. Scrape the target website.
         headers = {"User-Agent": USER_AGENT}
         # Use a timeout to prevent the function from hanging indefinitely.
         response = requests.get(target_url, headers=headers, timeout=10)
@@ -69,7 +98,7 @@ def scrape_and_upload(request):
         response.raise_for_status()
         html_content = response.text
 
-        # 2. Generate a deterministic filename from the URL for versioning.
+        # 3. Generate a deterministic filename from the URL for versioning.
         parsed_url = urlparse(target_url)
         # Create a path-like structure from the URL's netloc and path.
         # This ensures that pages from different domains are stored separately.
@@ -85,7 +114,7 @@ def scrape_and_upload(request):
         elif not os.path.splitext(filename)[1]:
             filename += ".html"
 
-        # 3. Upload the raw HTML to Cloud Storage.
+        # 4. Upload the raw HTML to Cloud Storage.
         bucket = storage_client.bucket(raw_data_bucket)
         blob = bucket.blob(filename)
         blob.upload_from_string(html_content, content_type="text/html")
@@ -105,6 +134,12 @@ def scrape_and_upload(request):
             )
         )
         return success_message, 200
+
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        # This catches errors from parsing the Pub/Sub message.
+        log_message = f"Error decoding Pub/Sub message data: {e}"
+        print(json.dumps({"message": log_message, "severity": "ERROR"}))
+        return log_message, 400
 
     except requests.exceptions.RequestException as e:
         # This catches connection errors, timeouts, and HTTP errors.

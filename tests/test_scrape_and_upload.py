@@ -1,5 +1,7 @@
 import os
 import sys
+import json
+import base64
 import requests
 
 from google.api_core import exceptions as google_exceptions
@@ -15,18 +17,35 @@ from flask import Request
 from main import scrape_and_upload
 
 
+def _create_mock_pubsub_request(mocker, url: str) -> Request:
+    """Helper to create a mock Flask request simulating a Pub/Sub push."""
+    message_data = {"url": url}
+    encoded_data = base64.b64encode(json.dumps(message_data).encode("utf-8"))
+    pubsub_message = {
+        "message": {
+            "data": encoded_data.decode("utf-8"),
+            "message_id": "test-message-id",
+        },
+        "subscription": "test-subscription",
+    }
+    mock_request = mocker.Mock(spec=Request)
+    mock_request.get_json.return_value = pubsub_message
+    return mock_request
+
+
 def test_scrape_and_upload_success(mocker, monkeypatch):
     """
-    Tests the happy path for the scrape_and_upload function.
+    Tests the happy path for the scrape_and_upload function,
+    triggered by a Pub/Sub push notification.
+    - Mocks a Pub/Sub push request containing the target URL.
     - Mocks successful web request.
     - Mocks GCS upload.
     - Verifies the function returns a success message and status code.
     """
     # 1. Setup: Mock environment variables and external dependencies
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
-    # Use a realistic URL to test filename generation
+    # The target URL is now passed via the request body, not an env var.
     target_url = "http://books.toscrape.com/index.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the requests.get call
     mock_response = mocker.Mock()
@@ -41,10 +60,8 @@ def test_scrape_and_upload_success(mocker, monkeypatch):
     mock_bucket = mock_storage_client.bucket.return_value
     mock_blob = mock_bucket.blob.return_value
 
-    # The function expects a Flask request object, but doesn't use it.
-    # A simple mock is sufficient.
-    mock_flask_request = mocker.Mock(spec=Request)
-
+    # Mock a Flask request object simulating a Pub/Sub push notification.
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
     # 2. Execution: Call the function
     response_text, status_code = scrape_and_upload(mock_flask_request)
 
@@ -76,7 +93,7 @@ def test_scrape_and_upload_success(mocker, monkeypatch):
 
 def test_scrape_and_upload_request_failure(mocker, monkeypatch):
     """
-    Tests how scrape_and_upload handles a web request failure.
+    Tests how scrape_and_upload handles a web request failure when triggered by Pub/Sub.
     - Mocks a failing web request (e.g., 404 Not Found).
     - Verifies that no file is uploaded to GCS.
     - Verifies the function returns an error message and status code 500.
@@ -84,7 +101,6 @@ def test_scrape_and_upload_request_failure(mocker, monkeypatch):
     # 1. Setup
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
     target_url = "http://test.com/not-found.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the requests.get call to simulate an HTTP error
     mock_response = mocker.Mock()
@@ -93,7 +109,7 @@ def test_scrape_and_upload_request_failure(mocker, monkeypatch):
     mock_requests_get = mocker.patch("main.requests.get", return_value=mock_response)
 
     mock_storage_client = mocker.patch("main.storage_client")
-    mock_flask_request = mocker.Mock(spec=Request)
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution
     response_text, status_code = scrape_and_upload(mock_flask_request)
@@ -108,7 +124,7 @@ def test_scrape_and_upload_request_failure(mocker, monkeypatch):
 
 def test_scrape_and_upload_timeout(mocker, monkeypatch):
     """
-    Tests how scrape_and_upload handles a web request timeout.
+    Tests how scrape_and_upload handles a web request timeout when triggered by Pub/Sub.
     - Mocks a timeout from requests.get.
     - Verifies that no file is uploaded to GCS.
     - Verifies the function returns an error message and status code 500.
@@ -116,16 +132,15 @@ def test_scrape_and_upload_timeout(mocker, monkeypatch):
     # 1. Setup
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
     target_url = "http://test.com/slow-site.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock requests.get to raise a Timeout exception
     mock_requests_get = mocker.patch(
         "main.requests.get",
         side_effect=requests.exceptions.Timeout("Connection timed out"),
     )
-
     mock_storage_client = mocker.patch("main.storage_client")
-    mock_flask_request = mocker.Mock(spec=Request)
+
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution
     response_text, status_code = scrape_and_upload(mock_flask_request)
@@ -140,7 +155,7 @@ def test_scrape_and_upload_timeout(mocker, monkeypatch):
 
 def test_scrape_and_upload_connection_error(mocker, monkeypatch):
     """
-    Tests how scrape_and_upload handles a generic network connection error.
+    Tests how scrape_and_upload handles a generic network connection error when triggered by Pub/Sub.
     - Mocks a ConnectionError from requests.get.
     - Verifies that no file is uploaded to GCS.
     - Verifies the function returns an error message and status code 500.
@@ -148,7 +163,6 @@ def test_scrape_and_upload_connection_error(mocker, monkeypatch):
     # 1. Setup
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
     target_url = "http://test.com/unreachable-site.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock requests.get to raise a ConnectionError
     mock_requests_get = mocker.patch(
@@ -157,9 +171,9 @@ def test_scrape_and_upload_connection_error(mocker, monkeypatch):
             "Failed to establish a new connection"
         ),
     )
-
     mock_storage_client = mocker.patch("main.storage_client")
-    mock_flask_request = mocker.Mock(spec=Request)
+
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution
     response_text, status_code = scrape_and_upload(mock_flask_request)
@@ -174,7 +188,7 @@ def test_scrape_and_upload_connection_error(mocker, monkeypatch):
 
 def test_scrape_and_upload_gcs_failure(mocker, monkeypatch):
     """
-    Tests how scrape_and_upload handles a GCS upload failure.
+    Tests how scrape_and_upload handles a GCS upload failure when triggered by Pub/Sub.
     - Mocks a successful web request.
     - Mocks a failing GCS upload.
     - Verifies the function returns an error message and status code 500.
@@ -182,7 +196,6 @@ def test_scrape_and_upload_gcs_failure(mocker, monkeypatch):
     # 1. Setup
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
     target_url = "http://test.com/index.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the successful requests.get call
     mock_response = mocker.Mock()
@@ -197,7 +210,7 @@ def test_scrape_and_upload_gcs_failure(mocker, monkeypatch):
     gcs_error = google_exceptions.GoogleAPICallError("GCS upload failed for test")
     mock_blob.upload_from_string.side_effect = gcs_error
 
-    mock_flask_request = mocker.Mock(spec=Request)
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution
     response_text, status_code = scrape_and_upload(mock_flask_request)
@@ -213,16 +226,16 @@ def test_scrape_and_upload_gcs_failure(mocker, monkeypatch):
 
 def test_scrape_and_upload_uses_url_for_filename(mocker, monkeypatch):
     """
-    Tests that the uploaded filename is based on the URL path for versioning.
+    Tests that the uploaded filename is based on the URL path for versioning
+    when triggered by Pub/Sub.
     - Mocks successful web request.
     - Mocks GCS upload.
     - Verifies the blob name is derived directly from the URL path.
     """
     # 1. Setup: Mock environment variables and external dependencies
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
-    # Use a URL with a path component to test filename generation
+    # The target URL is now passed via the request body.
     target_url = "http://example.com/some/path/page.html"
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the requests.get call
     mock_response = mocker.Mock()
@@ -237,9 +250,7 @@ def test_scrape_and_upload_uses_url_for_filename(mocker, monkeypatch):
     mock_bucket = mock_storage_client.bucket.return_value
     mock_blob = mock_bucket.blob.return_value
 
-    # The function expects a Flask request object, but doesn't use it.
-    # A simple mock is sufficient.
-    mock_flask_request = mocker.Mock(spec=Request)
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution: Call the function
     response_text, status_code = scrape_and_upload(mock_flask_request)
@@ -273,13 +284,12 @@ def test_scrape_and_upload_uses_url_for_filename(mocker, monkeypatch):
 
 def test_scrape_and_upload_root_url_creates_index(mocker, monkeypatch):
     """
-    Tests that a root URL (e.g., http://example.com) is correctly
-    saved as 'example.com/index.html'.
+    Tests that a root URL from a Pub/Sub message is correctly saved as
+    'example.com/index.html'.
     """
     # 1. Setup
     monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
     target_url = "http://example.com"  # Root URL with no path
-    monkeypatch.setenv("TARGET_URL", target_url)
 
     # Mock the requests.get call
     mock_response = mocker.Mock()
@@ -292,7 +302,7 @@ def test_scrape_and_upload_root_url_creates_index(mocker, monkeypatch):
     mock_bucket = mock_storage_client.bucket.return_value
     mock_blob = mock_bucket.blob.return_value
 
-    mock_flask_request = mocker.Mock(spec=Request)
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
 
     # 2. Execution
     scrape_and_upload(mock_flask_request)
