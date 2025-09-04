@@ -3,41 +3,94 @@ steps:
 # This single step installs all necessary packages and then immediately
 # runs the test suite. The '&&' ensures that tests only run if the
 # installation is successful. The build will fail if coverage is below 80%.
-- name: 'python:3.11-slim'
+- name: 'python:3.13-slim'
   id: 'Install and Test'
   entrypoint: 'bash'
   args:
   - '-c'
   - |
+    pip install --upgrade pip setuptools && \
     pip install -r requirements.txt pytest pytest-cov pytest-mock && \
     pytest --cov=main --cov-report=term-missing --cov-fail-under=80
 
-# Step 2: Deploy the web scraper function (only if tests pass)
-- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+# Step 2: Build and Push Container Image
+# Builds the function's code into a container image using Google's buildpacks
+# and pushes it to Artifact Registry. This creates a single, reusable image
+# for both function deployments. We specify the Python version to ensure
+# a consistent and reproducible build environment.
+- name: 'gcr.io/k8s-skaffold/pack'
+  id: 'Build and Push'
+  entrypoint: 'pack'
+  env:
+  - 'GOOGLE_PYTHON_VERSION=3.13'
   args:
-  - gcloud
-  - functions
-  - deploy
+  - 'build'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/ramble-web-scraper-docker-repository/ramble-web-scraper-image:$SHORT_SHA'
+  - '--publish'
+  - '--builder=gcr.io/buildpacks/builder:google-22'
+  - '--path=.'
+
+# Step 3: Scan image for vulnerabilities
+# Waits for the Artifact Registry scan to complete and fails the build if any
+# CRITICAL or HIGH severity vulnerabilities are found. This script checks if the
+# gcloud list command returns any results for the specified filter.
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Scan for Vulnerabilities'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    # Configure shell to exit on error and to fail on pipeline errors.
+    # -e: Exit immediately if a command exits with a non-zero status.
+    # -o pipefail: The return value of a pipeline is the status of
+    # the last command to exit with a non-zero status.
+    set -eo pipefail
+
+    echo "Checking for CRITICAL or HIGH severity vulnerabilities..."
+    # Install jq to parse the JSON output from gcloud
+    apt-get update && apt-get install -y jq
+
+    # Use 'gcloud ... list' to get a summary of vulnerability counts.
+    # Pipe the output to jq, which uses the -e flag to set its exit code.
+    # jq will exit with 0 (success) if the expression is true (no high/critical vulns).
+    # It will exit with 1 (failure) if the expression is false (vulns found),
+    # which automatically fails this build step.
+    gcloud artifacts docker images list --show-occurrences-from=1 \
+      "us-central1-docker.pkg.dev/$PROJECT_ID/ramble-web-scraper-docker-repository/ramble-web-scraper-image" \
+      --occurrence-filter='kind="VULNERABILITY"' --format=json \
+      | jq -e '(.[0].vuln_counts.HIGH // 0) == 0 and (.[0].vuln_counts.CRITICAL // 0) == 0'
+
+    # If jq exited with 0, the script continues and we print a success message.
+    echo "SUCCESS: No CRITICAL or HIGH severity vulnerabilities found."
+
+# Step 4: Deploy the web scraper function (only if tests pass)
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Deploy Scraper Function'
+  args:
+  - 'gcloud'
+  - 'functions'
+  - 'deploy'
   - 'ramble-web-scraper-service'
   - '--gen2'
   - '--region=us-central1'
   - '--source=.'
-  - '--runtime=python311'
+  - '--runtime=python313'
   - '--entry-point=scrape_and_upload'
   - '--trigger-topic=crawl-queue'
   - '--set-env-vars=RAW_DATA_BUCKET=ramble-web-scraper-raw-data-bucket'
 
-# Step 3: Deploy the data processing function (only if tests pass)
+# Step 5: Deploy the data processing function (only if tests pass)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  id: 'Deploy Processor Function'
   args:
-  - gcloud
-  - functions
-  - deploy
+  - 'gcloud'
+  - 'functions'
+  - 'deploy'
   - 'ramble-process-data-service'
   - '--gen2'
   - '--region=us-central1'
   - '--source=.'
-  - '--runtime=python311'
+  - '--runtime=python313'
   - '--entry-point=process_data'
   - '--trigger-bucket=ramble-web-scraper-raw-data-bucket'
   - '--set-env-vars=PROCESSED_DATA_BUCKET=ramble-web-scraper-processed-data-bucket,CRAWL_QUEUE_TOPIC=projects/ramble-web-scraper/topics/crawl-queue'
