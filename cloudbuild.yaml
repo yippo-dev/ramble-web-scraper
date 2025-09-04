@@ -1,4 +1,18 @@
 steps:
+# Step 1: Install Dependencies & Run Tests
+# This single step installs all necessary packages and then immediately
+# runs the test suite. The '&&' ensures that tests only run if the
+# installation is successful. The build will fail if coverage is below 80%.
+- name: 'python:3.11-slim'
+  id: 'Install and Test'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    pip install -r requirements.txt pytest pytest-cov pytest-mock && \
+    pytest --cov=main --cov-report=term-missing --cov-fail-under=80
+
+# Step 2: Deploy the web scraper function (only if tests pass)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   args:
   - gcloud
@@ -13,6 +27,7 @@ steps:
   - '--trigger-topic=crawl-queue'
   - '--set-env-vars=RAW_DATA_BUCKET=ramble-web-scraper-raw-data-bucket'
 
+# Step 3: Deploy the data processing function (only if tests pass)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   args:
   - gcloud
