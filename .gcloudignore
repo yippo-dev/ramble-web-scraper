@@ -1,0 +1,32 @@
+# .gcloudignore
+# This file tells gcloud which files to ignore when deploying.
+# The syntax is the same as .gitignore.
+
+# Git directory
+.git/
+
+# IDE/editor configuration
+.vscode/
+.idea/
+
+# Python virtual environment and cache
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Test files and directories
+tests/
+test/
+*.test.py
+
+# Local environment variables
+.env
+.env.*
+!/.env.example
+
+# The Cloud Build file doesn't need to be deployed with the function
+cloudbuild.yaml
+
+# README files
+README.md

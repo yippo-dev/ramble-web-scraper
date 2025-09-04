@@ -1,0 +1,31 @@
+steps:
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  args:
+  - gcloud
+  - functions
+  - deploy
+  - 'ramble-web-scraper-service'
+  - '--gen2'
+  - '--region=us-central1'
+  - '--source=.'
+  - '--runtime=python311'
+  - '--entry-point=scrape_and_upload'
+  - '--trigger-topic=crawl-queue'
+  - '--set-env-vars=RAW_DATA_BUCKET=ramble-web-scraper-raw-data-bucket'
+
+- name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  args:
+  - gcloud
+  - functions
+  - deploy
+  - 'ramble-process-data-service'
+  - '--gen2'
+  - '--region=us-central1'
+  - '--source=.'
+  - '--runtime=python311'
+  - '--entry-point=process_data'
+  - '--trigger-bucket=ramble-web-scraper-raw-data-bucket'
+  - '--set-env-vars=PROCESSED_DATA_BUCKET=ramble-web-scraper-processed-data-bucket,CRAWL_QUEUE_TOPIC=projects/ramble-web-scraper/topics/crawl-queue'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
