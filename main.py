@@ -105,10 +105,10 @@ def scrape_and_upload(request):
         # This ensures that pages from different domains are stored separately.
         filename = parsed_url.netloc + parsed_url.path
 
-        # If the path ends with a '/', treat it as an index page.
+        # If the path is empty or just a '/', treat it as an index page.
         if filename.endswith("/"):
             filename += "index.html"
-        # Handle root URL case where path is empty
+        # Handle root URL case where path is empty (e.g., http://example.com)
         elif not parsed_url.path:
             filename += "/index.html"
         # Ensure the filename has an extension if it's a "directory-like" URL without one
@@ -232,7 +232,7 @@ def process_data(cloud_event):
                     }
                 )
             )
-            base_url = f"http://{file_name}"
+            base_url = f"https://{domain}"
 
             # Extract next page URL
             next_page_url = None
@@ -271,7 +271,7 @@ def process_data(cloud_event):
                     }
                 )
             )
-            base_url = f"http://{file_name}"
+            base_url = f"https://{domain}"
             result_urls = []
             for tag in soup.find_all("a"):
                 if tag.get("href"):

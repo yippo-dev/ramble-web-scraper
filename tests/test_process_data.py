@@ -67,9 +67,9 @@ def test_process_data_fallback_extracts_all_links(mocker, monkeypatch):
         "source_file": source_file,
         "next_page_url": None,
         "result_urls": [
-            "http://unconfigured-domain.com/about.html",
+            "https://unconfigured-domain.com/about.html",
             "https://external.com/resource",
-            "http://unconfigured-domain.com/products/product1.html",
+            "https://unconfigured-domain.com/products/product1.html",
         ],
     }
     expected_json_string = json.dumps(expected_json_content, indent=2)
@@ -356,10 +356,10 @@ def test_process_data_uses_bundled_config_for_link_extraction(mocker, monkeypatc
     # Verify the content of the uploaded JSON
     expected_json_content = {
         "source_file": source_file,
-        "next_page_url": "http://books.toscrape.com/catalogue/page-2.html",
+        "next_page_url": "https://books.toscrape.com/catalogue/page-2.html",
         "result_urls": [
-            "http://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
-            "http://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html",
+            "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+            "https://books.toscrape.com/catalogue/tipping-the-velvet_999/index.html",
         ],
     }
     mock_processed_blob.upload_from_string.assert_called_once()
@@ -398,7 +398,7 @@ def test_process_data_publishes_next_page_url(mocker, monkeypatch):
 
     # Mock HTML with a next page link
     next_page_relative_url = "catalogue/page-2.html"
-    next_page_absolute_url = f"http://books.toscrape.com/{next_page_relative_url}"
+    next_page_absolute_url = f"https://books.toscrape.com/{next_page_relative_url}"
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -500,25 +500,20 @@ def test_process_data_handles_www_subdomain(mocker, monkeypatch):
     mock_cloud_event.data = {"bucket": source_bucket, "name": source_file}
 
     # Mock HTML content from recreation.gov
+    # This HTML now matches the structure expected by the updated selector in config.json
     html_content = """
     <html><body>
-        <div class="rec-flex-card-body-wrap">
-            <a href="/camping/campgrounds/231875">
-                <h2 class="rec-flex-card-title h5-normal">BUFFALO CAMPGROUND</h2>
-            </a>
+        <div id="rec-sr-content">
+            <ul>
+                <li><h2><a href="/camping/campgrounds/231875">BUFFALO CAMPGROUND</a></h2></li>
+            </ul>
         </div>
         <a href="/some-other-link">An irrelevant link</a>
     </body></html>
     """
 
-    # Mock the config.json file content
-    config_data = {
-        "recreation.gov": {
-            "next_page_selector": None,
-            "result_link_selector": "a:has(h2.rec-flex-card-title)",
-        }
-    }
-    mocker.patch("builtins.open", mocker.mock_open(read_data=json.dumps(config_data)))
+    # We are no longer mocking config.json, so the test will use the real one.
+    # The `load_config` function will now read the actual config.json file.
 
     # Mock GCS and Pub/Sub
     mock_storage_client = mocker.patch("main.storage_client")
@@ -548,14 +543,12 @@ def test_process_data_handles_www_subdomain(mocker, monkeypatch):
     expected_json_content = {
         "source_file": source_file,
         "next_page_url": None,
-        "result_urls": ["http://www.recreation.gov/camping/campgrounds/231875"],
+        "result_urls": ["https://www.recreation.gov/camping/campgrounds/231875"],
     }
     mock_processed_blob.upload_from_string.assert_called_once()
     uploaded_string = mock_processed_blob.upload_from_string.call_args[0][0]
     uploaded_data = json.loads(uploaded_string)
 
-    # This assertion will fail with the current code because it will fall back
-    # to extracting ALL links, not just the configured ones.
     assert uploaded_data == expected_json_content
 
     # Verify no "next page" was published

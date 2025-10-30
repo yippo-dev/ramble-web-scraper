@@ -10,6 +10,6 @@
     "recreation.gov": {
         "comment": "This selector is for link-based pagination. The site may also use JS-driven buttons which are not supported by the current scraper.",
         "next_page_selector": null, 
-        "result_link_selector": "a:has(h2.rec-flex-card-title)"
+        "result_link_selector": "#rec-sr-content li h2 a"
     }
 }
