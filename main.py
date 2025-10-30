@@ -214,7 +214,13 @@ def process_data(cloud_event):
 
         # 3. Determine processing strategy based on config.
         domain = file_name.split("/")[0]
-        domain_config = config.get(domain)
+        # Try to find a config for the exact domain (e.g., 'www.example.com').
+        # If not found, try stripping 'www.' and looking again (e.g., 'example.com').
+        domain_config = config.get(domain) or (
+            config.get(domain.replace("www.", "", 1))
+            if domain.startswith("www.")
+            else None
+        )
 
         if domain_config:
             # --- New Logic: Extract links based on config ---

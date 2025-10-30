@@ -482,3 +482,81 @@ def test_process_data_does_not_publish_if_no_next_link(mocker, monkeypatch):
 
     # 3. Assertions
     mock_publisher.publish.assert_not_called()
+
+
+def test_process_data_handles_www_subdomain(mocker, monkeypatch):
+    """
+    Tests that if a domain has a 'www.' prefix, the function can still find
+    the configuration for the base domain (e.g., 'recreation.gov').
+    """
+    # 1. Setup
+    monkeypatch.setenv("PROCESSED_DATA_BUCKET", "test-processed-bucket")
+    monkeypatch.setenv("CRAWL_QUEUE_TOPIC", "some/topic")
+
+    # Mock the CloudEvent for a file from a 'www.' subdomain
+    source_bucket = "test-raw-bucket"
+    source_file = "www.recreation.gov/search.html"  # Note the 'www.'
+    mock_cloud_event = mocker.Mock()
+    mock_cloud_event.data = {"bucket": source_bucket, "name": source_file}
+
+    # Mock HTML content from recreation.gov
+    html_content = """
+    <html><body>
+        <div class="rec-flex-card-body-wrap">
+            <a href="/camping/campgrounds/231875">
+                <h2 class="rec-flex-card-title h5-normal">BUFFALO CAMPGROUND</h2>
+            </a>
+        </div>
+        <a href="/some-other-link">An irrelevant link</a>
+    </body></html>
+    """
+
+    # Mock the config.json file content
+    config_data = {
+        "recreation.gov": {
+            "next_page_selector": None,
+            "result_link_selector": "a:has(h2.rec-flex-card-title)",
+        }
+    }
+    mocker.patch("builtins.open", mocker.mock_open(read_data=json.dumps(config_data)))
+
+    # Mock GCS and Pub/Sub
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_raw_bucket = mocker.Mock()
+    mock_raw_blob = mocker.Mock()
+    mock_raw_blob.download_as_text.return_value = html_content
+    mock_raw_bucket.blob.return_value = mock_raw_blob
+    mock_processed_bucket = mocker.Mock()
+    mock_processed_blob = mocker.Mock()
+    mock_processed_bucket.blob.return_value = mock_processed_blob
+
+    def bucket_side_effect(bucket_name):
+        if bucket_name == source_bucket:
+            return mock_raw_bucket
+        if bucket_name == "test-processed-bucket":
+            return mock_processed_bucket
+        return mocker.Mock()
+
+    mock_storage_client.bucket.side_effect = bucket_side_effect
+    mock_publisher = mocker.patch("main.pubsub_publisher")
+
+    # 2. Execution
+    process_data(mock_cloud_event)
+
+    # 3. Assertions
+    # Verify the correct JSON was generated and uploaded
+    expected_json_content = {
+        "source_file": source_file,
+        "next_page_url": None,
+        "result_urls": ["http://www.recreation.gov/camping/campgrounds/231875"],
+    }
+    mock_processed_blob.upload_from_string.assert_called_once()
+    uploaded_string = mock_processed_blob.upload_from_string.call_args[0][0]
+    uploaded_data = json.loads(uploaded_string)
+
+    # This assertion will fail with the current code because it will fall back
+    # to extracting ALL links, not just the configured ones.
+    assert uploaded_data == expected_json_content
+
+    # Verify no "next page" was published
+    mock_publisher.publish.assert_not_called()
