@@ -37,6 +37,7 @@ steps:
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Scan for Vulnerabilities'
   entrypoint: 'bash'
+  waitFor: ['Build and Push']
   args:
   - '-c'
   - |
@@ -66,6 +67,7 @@ steps:
 # Step 4: Deploy the web scraper function (only if tests pass)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy Scraper Function'
+  waitFor: ['Scan for Vulnerabilities']
   args:
   - 'gcloud'
   - 'functions'
@@ -82,6 +84,7 @@ steps:
 # Step 5: Deploy the data processing function (only if tests pass)
 - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
   id: 'Deploy Processor Function'
+  waitFor: ['Scan for Vulnerabilities']
   args:
   - 'gcloud'
   - 'functions'
