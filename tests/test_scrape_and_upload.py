@@ -314,3 +314,41 @@ def test_scrape_and_upload_root_url_creates_index(mocker, monkeypatch):
     mock_blob.upload_from_string.assert_called_once_with(
         mock_response.text, content_type="text/html"
     )
+
+
+def test_scrape_and_upload_filename_includes_query_params(mocker, monkeypatch):
+    """
+    Tests that the GCS filename includes a sanitized version of the URL's
+    query parameters to prevent clashes between different searches.
+    """
+    # 1. Setup
+    monkeypatch.setenv("RAW_DATA_BUCKET", "test-raw-bucket")
+    target_url = "http://example.com/search?q=denver%2C%20co&page=1"
+
+    # Mock the requests.get call
+    mock_response = mocker.Mock()
+    mock_response.text = "<html><body>Search Results for Denver</body></html>"
+    mock_response.raise_for_status.return_value = None
+    mocker.patch("main.requests.get", return_value=mock_response)
+
+    # Mock the GCS client
+    mock_storage_client = mocker.patch("main.storage_client")
+    mock_bucket = mock_storage_client.bucket.return_value
+
+    mock_flask_request = _create_mock_pubsub_request(mocker, target_url)
+
+    # 2. Execution
+    scrape_and_upload(mock_flask_request)
+
+    # 3. Assertions
+    # The current implementation will generate 'example.com/search.html',
+    # but we expect the query parameters to be included and sanitized.
+    # A good sanitized format replaces '?' with '_', '&' with '_', and '=' with '-'.
+    # The path part should be 'search', and the query part should be appended.
+    expected_filename = "example.com/search_q-denver%2C%20co_page-1.html"
+
+    # This assertion will fail until the implementation is updated.
+    mock_bucket.blob.assert_called_once_with(expected_filename)
+    mock_bucket.blob.return_value.upload_from_string.assert_called_once_with(
+        mock_response.text, content_type="text/html"
+    )

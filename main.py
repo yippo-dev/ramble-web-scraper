@@ -105,6 +105,13 @@ def scrape_and_upload(request):
         # This ensures that pages from different domains are stored separately.
         filename = parsed_url.netloc + parsed_url.path
 
+        # Append a sanitized version of the query string, if it exists.
+        if parsed_url.query:
+            # Sanitize for filename: replace separators with underscores/dashes.
+            safe_query = parsed_url.query.replace("&", "_").replace("=", "-")
+            # Use '_' to separate the path from the query params.
+            filename += f"_{safe_query}"
+
         # If the path is empty or just a '/', treat it as an index page.
         if filename.endswith("/"):
             filename += "index.html"
